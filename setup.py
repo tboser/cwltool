@@ -17,14 +17,14 @@ try:
 except ImportError:
     tagger = egg_info_cmd.egg_info
 
-setup(name='cwltool',
+setup(name='cwltool-ucsc',
       version='1.0',
       description='Common workflow language reference implementation',
       long_description=open(README).read(),
       author='Common workflow language working group',
       author_email='common-workflow-language@googlegroups.com',
-      url="https://github.com/common-workflow-language/cwltool",
-      download_url="https://github.com/common-workflow-language/cwltool",
+      url="https://github.com/tboser/cwltool",
+      download_url="https://github.com/tboser/cwltool",
       license='Apache 2.0',
       packages=["cwltool"],
       package_data={'cwltool': ['schemas/draft-2/*.yml',
