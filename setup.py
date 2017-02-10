@@ -19,7 +19,7 @@ except ImportError:
 
 setup(name='cwltool-ucsc',
       version='1.0',
-      description='Common workflow language reference implementation',
+      description='Common workflow language reference implementation patched for UCSC Genomics Institute',
       long_description=open(README).read(),
       author='Common workflow language working group',
       author_email='common-workflow-language@googlegroups.com',
