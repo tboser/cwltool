@@ -1,15 +1,12 @@
 import copy
-
+from .utils import aslist
+from . import expression
 import avro
 import schema_salad.validate as validate
-from schema_salad.sourceline import SourceLine
 from typing import Any, Callable, Text, Type, Union
-
-from . import expression
 from .errors import WorkflowException
-from .pathmapper import PathMapper, adjustFileObjs, normalizeFilesDirs
 from .stdfsaccess import StdFsAccess
-from .utils import aslist
+from .pathmapper import PathMapper, adjustFileObjs, adjustDirObjs, normalizeFilesDirs
 
 CONTENT_LIMIT = 64 * 1024
 
@@ -20,8 +17,8 @@ def substitute(value, replace):  # type: (Text, Text) -> Text
     else:
         return value + replace
 
-
 class Builder(object):
+
     def __init__(self):  # type: () -> None
         self.names = None  # type: avro.schema.Names
         self.schemaDefs = None  # type: Dict[Text, Dict[Text, Any]]
@@ -39,14 +36,9 @@ class Builder(object):
         self.stagedir = None  # type: Text
         self.make_fs_access = None  # type: Type[StdFsAccess]
         self.build_job_script = None  # type: Callable[[List[str]], Text]
-        self.debug = False  # type: bool
 
-    def bind_input(self, schema, datum, lead_pos=None, tail_pos=None):
+    def bind_input(self, schema, datum, lead_pos=[], tail_pos=[]):
         # type: (Dict[Text, Any], Any, Union[int, List[int]], List[int]) -> List[Dict[Text, Any]]
-        if tail_pos is None:
-            tail_pos = []
-        if lead_pos is None:
-            lead_pos = []
         bindings = []  # type: List[Dict[Text,Text]]
         binding = None  # type: Dict[Text,Any]
         if "inputBinding" in schema and isinstance(schema["inputBinding"], dict):
@@ -143,6 +135,7 @@ class Builder(object):
             if schema["type"] == "Directory":
                 self.files.append(datum)
 
+
         # Position to front of the sort key
         if binding:
             for bi in bindings:
@@ -162,8 +155,7 @@ class Builder(object):
     def generate_arg(self, binding):  # type: (Dict[Text,Any]) -> List[Text]
         value = binding.get("datum")
         if "valueFrom" in binding:
-            with SourceLine(binding, "valueFrom", WorkflowException):
-                value = self.do_eval(binding["valueFrom"], context=value)
+            value = self.do_eval(binding["valueFrom"], context=value)
 
         prefix = binding.get("prefix")
         sep = binding.get("separate", True)
@@ -203,7 +195,7 @@ class Builder(object):
         # type: (Union[Dict[Text, Text], Text], Any, bool, bool) -> Any
         if recursive:
             if isinstance(ex, dict):
-                return {k: self.do_eval(v, context, pull_image, recursive) for k, v in ex.iteritems()}
+                return {k: self.do_eval(v, context, pull_image, recursive) for k,v in ex.iteritems()}
             if isinstance(ex, list):
                 return [self.do_eval(v, context, pull_image, recursive) for v in ex]
 
@@ -211,5 +203,4 @@ class Builder(object):
                                   self.outdir, self.tmpdir,
                                   self.resources,
                                   context=context, pull_image=pull_image,
-                                  timeout=self.timeout,
-                                  debug=self.debug)
+                                  timeout=self.timeout)

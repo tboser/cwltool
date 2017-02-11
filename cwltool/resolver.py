@@ -1,10 +1,9 @@
-import logging
 import os
-
-from schema_salad.ref_resolver import file_uri
+import logging
+import urllib
+import urlparse
 
 _logger = logging.getLogger("cwltool")
-
 
 def resolve_local(document_loader, uri):
     if uri.startswith("/"):
@@ -18,15 +17,14 @@ def resolve_local(document_loader, uri):
 
     for s in shares:
         if os.path.exists(s):
-            return file_uri(s)
+            return ("file://%s" % s)
         if os.path.exists("%s.cwl" % s):
-            return file_uri(s)
+            return ("file://%s.cwl" % s)
     return None
-
 
 def tool_resolver(document_loader, uri):
     for r in [resolve_local]:
         ret = r(document_loader, uri)
         if ret is not None:
             return ret
-    return file_uri(os.path.abspath(uri))
+    return "file://" + os.path.abspath(uri)

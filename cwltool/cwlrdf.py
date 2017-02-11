@@ -1,14 +1,13 @@
+import json
 import urlparse
-
-from rdflib import Graph
-from schema_salad.jsonld_context import makerdf
-from schema_salad.ref_resolver import ContextType
-from typing import Any, Dict, IO, Text
-
 from .process import Process
+from schema_salad.ref_resolver import Loader
+from schema_salad.jsonld_context import makerdf
+from rdflib import Graph, plugin, URIRef
+from rdflib.serializer import Serializer
+from typing import Any, Dict, IO, Text, Union
 
-
-def gather(tool, ctx):  # type: (Process, ContextType) -> Graph
+def gather(tool, ctx):  # type: (Process, Loader.ContextType) -> Graph
     g = Graph()
 
     def visitor(t):
@@ -17,16 +16,14 @@ def gather(tool, ctx):  # type: (Process, ContextType) -> Graph
     tool.visit(visitor)
     return g
 
-
 def printrdf(wf, ctx, sr, stdout):
-    # type: (Process, ContextType, Text, IO[Any]) -> None
+    # type: (Process, Loader.ContextType, Text, IO[Any]) -> None
     stdout.write(gather(wf, ctx).serialize(format=sr))
-
 
 def lastpart(uri):  # type: (Any) -> Text
     uri = Text(uri)
     if "/" in uri:
-        return uri[uri.rindex("/") + 1:]
+        return uri[uri.rindex("/")+1:]
     else:
         return uri
 
@@ -86,7 +83,6 @@ def dot_with_parameters(g, stdout):  # type: (Graph, IO[Any]) -> None
 
     for (inp,) in qres:
         stdout.write(u'"%s" [shape=octagon]\n' % (lastpart(inp)))
-
 
 def dot_without_parameters(g, stdout):  # type: (Graph, IO[Any]) -> None
     dotname = {}  # type: Dict[Text,Text]
@@ -162,12 +158,12 @@ def dot_without_parameters(g, stdout):  # type: (Graph, IO[Any]) -> None
 
 
 def printdot(wf, ctx, stdout, include_parameters=False):
-    # type: (Process, ContextType, Any, bool) -> None
+    # type: (Process, Loader.ContextType, Any, bool) -> None
     g = gather(wf, ctx)
 
     stdout.write("digraph {")
 
-    # g.namespace_manager.qname(predicate)
+    #g.namespace_manager.qname(predicate)
 
     if include_parameters:
         dot_with_parameters(g, stdout)

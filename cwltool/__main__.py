@@ -1,5 +1,4 @@
-import sys
-
 from . import main
+import sys
 
 sys.exit(main.main())

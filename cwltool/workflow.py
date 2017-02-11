@@ -1,31 +1,30 @@
+from . import job
+from . import draft2tool
+from .utils import aslist
+from .process import Process, get_feature, empty_subtree, shortname, uniquename
+from .errors import WorkflowException
 import copy
-import functools
-import json
 import logging
 import random
-import tempfile
+import os
 from collections import namedtuple
-
+import functools
 import schema_salad.validate as validate
-from schema_salad.sourceline import SourceLine
-from typing import Any, Callable, cast, Generator, Iterable, List, Text, Union
-
-from . import draft2tool
+import urlparse
+import tempfile
+import shutil
+import json
+import schema_salad
 from . import expression
-from .errors import WorkflowException
 from .load_tool import load_tool
-from .process import Process, shortname, uniquename
-from .utils import aslist
+from typing import Any, Callable, cast, Generator, Iterable, List, Text, Union
 
 _logger = logging.getLogger("cwltool")
 
 WorkflowStateItem = namedtuple('WorkflowStateItem', ['parameter', 'value'])
 
-
-def defaultMakeTool(toolpath_object,  # type: Dict[Text, Any]
-                    **kwargs  # type: Any
-                   ):
-    # type: (...) -> Process
+def defaultMakeTool(toolpath_object, **kwargs):
+    # type: (Dict[Text, Any], **Any) -> Process
     if not isinstance(toolpath_object, dict):
         raise WorkflowException(u"Not a dict: `%s`" % toolpath_object)
     if "class" in toolpath_object:
@@ -36,10 +35,7 @@ def defaultMakeTool(toolpath_object,  # type: Dict[Text, Any]
         elif toolpath_object["class"] == "Workflow":
             return Workflow(toolpath_object, **kwargs)
 
-    raise WorkflowException(
-        u"Missing or invalid 'class' field in %s, expecting one of: CommandLineTool, ExpressionTool, Workflow" %
-        toolpath_object["id"])
-
+    raise WorkflowException(u"Missing or invalid 'class' field in %s, expecting one of: CommandLineTool, ExpressionTool, Workflow" % toolpath_object["id"])
 
 def findfiles(wo, fn=None):  # type: (Any, List) -> List[Dict[Text, Any]]
     if fn is None:
@@ -74,24 +70,23 @@ def match_types(sinktype, src, iid, inputobj, linkMerge, valueFrom):
                 return False
         return True
     elif linkMerge:
-        if iid not in inputobj:
-            inputobj[iid] = []
-        if linkMerge == "merge_nested":
-            inputobj[iid].append(src.value)
-        elif linkMerge == "merge_flattened":
-            if isinstance(src.value, list):
-                inputobj[iid].extend(src.value)
-            else:
+            if iid not in inputobj:
+                inputobj[iid] = []
+            if linkMerge == "merge_nested":
                 inputobj[iid].append(src.value)
-        else:
-            raise WorkflowException(u"Unrecognized linkMerge enum '%s'" % linkMerge)
-        return True
+            elif linkMerge == "merge_flattened":
+                if isinstance(src.value, list):
+                    inputobj[iid].extend(src.value)
+                else:
+                    inputobj[iid].append(src.value)
+            else:
+                raise WorkflowException(u"Unrecognized linkMerge enum '%s'" % linkMerge)
+            return True
     elif valueFrom is not None or can_assign_src_to_sink(src.parameter["type"], sinktype) or sinktype == "Any":
         # simply assign the value from state to input
         inputobj[iid] = copy.deepcopy(src.value)
         return True
     return False
-
 
 def can_assign_src_to_sink(src, sink):  # type: (Any, Any) -> bool
     """Check for identical type specifications, ignoring extra keys like inputBinding.
@@ -115,7 +110,6 @@ def can_assign_src_to_sink(src, sink):  # type: (Any, Any) -> bool
         return src == sink
     return False
 
-
 def _compare_records(src, sink):
     # type: (Dict[Text, Any], Dict[Text, Any]) -> bool
     """Compare two records, ensuring they have compatible fields.
@@ -123,7 +117,6 @@ def _compare_records(src, sink):
     This handles normalizing record names, which will be relative to workflow
     step, so that they can be compared.
     """
-
     def _rec_fields(rec):  # type: (Dict[Text, Any]) -> Dict[Text, Any]
         out = {}
         for field in rec["fields"]:
@@ -136,17 +129,16 @@ def _compare_records(src, sink):
     for key in sinkfields.iterkeys():
         if (not can_assign_src_to_sink(
                 srcfields.get(key, "null"), sinkfields.get(key, "null"))
-            and sinkfields.get(key) is not None):
+                and sinkfields.get(key) is not None):
             _logger.info("Record comparison failure for %s and %s\n"
                          "Did not match fields for %s: %s and %s" %
                          (src["name"], sink["name"], key, srcfields.get(key),
-                          sinkfields.get(key)))
+                             sinkfields.get(key)))
             return False
     return True
 
-
-def object_from_state(state, parms, frag_only, supportsMultipleInput, sourceField, incomplete=False):
-    # type: (Dict[Text, WorkflowStateItem], List[Dict[Text, Any]], bool, bool, Text, bool) -> Dict[Text, Any]
+def object_from_state(state, parms, frag_only, supportsMultipleInput, sourceField):
+    # type: (Dict[Text, WorkflowStateItem], List[Dict[Text, Any]], bool, bool, Text) -> Dict[Text, Any]
     inputobj = {}  # type: Dict[Text, Any]
     for inp in parms:
         iid = inp["id"]
@@ -154,7 +146,7 @@ def object_from_state(state, parms, frag_only, supportsMultipleInput, sourceFiel
             iid = shortname(iid)
         if sourceField in inp:
             if (isinstance(inp[sourceField], list) and not
-            supportsMultipleInput):
+                    supportsMultipleInput):
                 raise WorkflowException(
                     "Workflow contains multiple inbound links to a single "
                     "parameter but MultipleInputFeatureRequirement is not "
@@ -165,18 +157,18 @@ def object_from_state(state, parms, frag_only, supportsMultipleInput, sourceFiel
                     if not match_types(
                             inp["type"], state[src], iid, inputobj,
                             inp.get("linkMerge", ("merge_nested"
-                                                  if len(connections) > 1 else None)),
+                                if len(connections) > 1 else None)),
                             valueFrom=inp.get("valueFrom")):
                         raise WorkflowException(
                             u"Type mismatch between source '%s' (%s) and "
                             "sink '%s' (%s)" % (src,
-                                                state[src].parameter["type"], inp["id"],
-                                                inp["type"]))
+                                state[src].parameter["type"], inp["id"],
+                                inp["type"]))
                 elif src not in state:
                     raise WorkflowException(
                         u"Connect source '%s' on parameter '%s' does not "
                         "exist" % (src, inp["id"]))
-                elif not incomplete:
+                else:
                     return None
         elif "default" in inp:
             inputobj[iid] = inp["default"]
@@ -188,6 +180,7 @@ def object_from_state(state, parms, frag_only, supportsMultipleInput, sourceFiel
 
 
 class WorkflowJobStep(object):
+
     def __init__(self, step):  # type: (Any) -> None
         self.step = step
         self.tool = step.tool
@@ -206,6 +199,7 @@ class WorkflowJobStep(object):
 
 
 class WorkflowJob(object):
+
     def __init__(self, workflow, **kwargs):
         # type: (Workflow, **Any) -> None
         self.workflow = workflow
@@ -223,33 +217,29 @@ class WorkflowJob(object):
 
         self.name = uniquename(u"workflow %s" % kwargs.get("name", shortname(self.workflow.tool.get("id", "embedded"))))
 
-        _logger.debug(u"[%s] initialized from %s", self.name,
-                      self.tool.get("id", "workflow embedded in %s" % kwargs.get("part_of")))
+        _logger.debug(u"[%s] initialized from %s", self.name, self.tool.get("id", "workflow embedded in %s" % kwargs.get("part_of")))
 
     def receive_output(self, step, outputparms, jobout, processStatus):
         # type: (WorkflowJobStep, List[Dict[Text,Text]], Dict[Text,Text], Text) -> None
-
         for i in outputparms:
             if "id" in i:
                 if i["id"] in jobout:
                     self.state[i["id"]] = WorkflowStateItem(i, jobout[i["id"]])
                 else:
-                    _logger.error(u"[%s] Output is missing expected field %s", step.name, i["id"])
+                    _logger.error(u"Output is missing expected field %s" % i["id"])
                     processStatus = "permanentFail"
 
-        if _logger.isEnabledFor(logging.DEBUG):
-            _logger.debug(u"[%s] produced output %s", step.name, json.dumps(jobout, indent=4))
+        _logger.debug(u"[%s] produced output %s", step.name, json.dumps(jobout, indent=4))
 
         if processStatus != "success":
             if self.processStatus != "permanentFail":
                 self.processStatus = processStatus
 
-            _logger.warn(u"[%s] completed %s", step.name, processStatus)
+            _logger.warn(u"[%s] completion status is %s", step.name, processStatus)
         else:
-            _logger.info(u"[%s] completed %s", step.name, processStatus)
+            _logger.info(u"[%s] completion status is %s", step.name, processStatus)
 
         step.completed = True
-        self.made_progress = True
 
     def try_make_job(self, step, **kwargs):
         # type: (WorkflowJobStep, **Any) -> Generator
@@ -278,14 +268,13 @@ class WorkflowJob(object):
                 if "valueFrom" in i}
 
             if len(valueFrom) > 0 and not bool(self.workflow.get_requirement("StepInputExpressionRequirement")[0]):
-                raise WorkflowException(
-                    "Workflow step contains valueFrom but StepInputExpressionRequirement not in requirements")
+                raise WorkflowException("Workflow step contains valueFrom but StepInputExpressionRequirement not in requirements")
 
-            vfinputs = {shortname(k): v for k, v in inputobj.iteritems()}
+            vfinputs = {shortname(k): v for k,v in inputobj.iteritems()}
 
             def postScatterEval(io):
                 # type: (Dict[Text, Any]) -> Dict[Text, Any]
-                shortio = {shortname(k): v for k, v in io.iteritems()}
+                shortio = {shortname(k): v for k,v in io.iteritems()}
 
                 def valueFromFunc(k, v):  # type: (Any, Any) -> Any
                     if k in valueFrom:
@@ -294,8 +283,7 @@ class WorkflowJob(object):
                             None, None, {}, context=v)
                     else:
                         return v
-
-                return {k: valueFromFunc(k, v) for k, v in io.items()}
+                return {k: valueFromFunc(k, v) for k,v in io.items()}
 
             if "scatter" in step.tool:
                 scatter = aslist(step.tool["scatter"])
@@ -308,29 +296,25 @@ class WorkflowJob(object):
                     jobs = dotproduct_scatter(step, inputobj, scatter,
                                               cast(  # known bug with mypy
                                                   # https://github.com/python/mypy/issues/797
-                                                  Callable[[Any], Any], callback), **kwargs)
+                                                  Callable[[Any], Any],callback), **kwargs)
                 elif method == "nested_crossproduct":
                     jobs = nested_crossproduct_scatter(step, inputobj,
-                                                       scatter, cast(Callable[[Any], Any], callback),
-                                                       # known bug in mypy
-                                                       # https://github.com/python/mypy/issues/797
-                                                       **kwargs)
+                        scatter, cast(Callable[[Any], Any], callback),
+                        # known bug in mypy
+                        # https://github.com/python/mypy/issues/797
+                        **kwargs)
                 elif method == "flat_crossproduct":
                     jobs = cast(Generator,
                                 flat_crossproduct_scatter(step, inputobj,
                                                           scatter,
                                                           cast(Callable[[Any], Any],
-                                                               # known bug in mypy
-                                                               # https://github.com/python/mypy/issues/797
+                                                         # known bug in mypy
+                                                         # https://github.com/python/mypy/issues/797
                                                                callback), 0, **kwargs))
             else:
-                if _logger.isEnabledFor(logging.DEBUG):
-                    _logger.debug(u"[job %s] job input %s", step.name, json.dumps(inputobj, indent=4))
-
+                _logger.debug(u"[job %s] job input %s", step.name, json.dumps(inputobj, indent=4))
                 inputobj = postScatterEval(inputobj)
-
-                if _logger.isEnabledFor(logging.DEBUG):
-                    _logger.debug(u"[job %s] evaluated job input to %s", step.name, json.dumps(inputobj, indent=4))
+                _logger.debug(u"[job %s] evaluated job input to %s", step.name, json.dumps(inputobj, indent=4))
                 jobs = step.job(inputobj, callback, **kwargs)
 
             step.submitted = True
@@ -355,69 +339,51 @@ class WorkflowJob(object):
         if "outdir" in kwargs:
             del kwargs["outdir"]
 
-        for e, i in enumerate(self.tool["inputs"]):
-            with SourceLine(self.tool["inputs"], e, WorkflowException):
-                iid = shortname(i["id"])
-                if iid in joborder:
-                    self.state[i["id"]] = WorkflowStateItem(i, copy.deepcopy(joborder[iid]))
-                elif "default" in i:
-                    self.state[i["id"]] = WorkflowStateItem(i, copy.deepcopy(i["default"]))
-                else:
-                    raise WorkflowException(
-                        u"Input '%s' not in input object and does not have a default value." % (i["id"]))
+        for i in self.tool["inputs"]:
+            iid = shortname(i["id"])
+            if iid in joborder:
+                self.state[i["id"]] = WorkflowStateItem(i, copy.deepcopy(joborder[iid]))
+            elif "default" in i:
+                self.state[i["id"]] = WorkflowStateItem(i, copy.deepcopy(i["default"]))
+            else:
+                raise WorkflowException(u"Input '%s' not in input object and does not have a default value." % (i["id"]))
 
         for s in self.steps:
             for out in s.tool["outputs"]:
                 self.state[out["id"]] = None
 
         completed = 0
-        while completed < len(self.steps):
-            self.made_progress = False
+        while completed < len(self.steps) and self.processStatus == "success":
+            made_progress = False
 
             for step in self.steps:
                 if kwargs.get("on_error", "stop") == "stop" and self.processStatus != "success":
                     break
 
                 if not step.submitted:
-                    try:
-                        step.iterable = self.try_make_job(step, **kwargs)
-                    except WorkflowException as e:
-                        _logger.error(u"[%s] Cannot make job: %s", step.name, e)
-                        _logger.debug("", exc_info=True)
-                        self.processStatus = "permanentFail"
+                    step.iterable = self.try_make_job(step, **kwargs)
 
                 if step.iterable:
-                    try:
-                        for newjob in step.iterable:
-                            if kwargs.get("on_error", "stop") == "stop" and self.processStatus != "success":
-                                break
-                            if newjob:
-                                self.made_progress = True
-                                yield newjob
-                            else:
-                                break
-                    except WorkflowException as e:
-                        _logger.error(u"[%s] Cannot make job: %s", step.name, e)
-                        _logger.debug("", exc_info=True)
-                        self.processStatus = "permanentFail"
+                    for newjob in step.iterable:
+                        if kwargs.get("on_error", "stop") == "stop" and self.processStatus != "success":
+                            break
+                        if newjob:
+                            made_progress = True
+                            yield newjob
+                        else:
+                            break
 
             completed = sum(1 for s in self.steps if s.completed)
 
-            if not self.made_progress and completed < len(self.steps):
-                if self.processStatus != "success":
-                    break
-                else:
-                    yield None
+            if not made_progress and completed < len(self.steps):
+                yield None
 
         supportsMultipleInput = bool(self.workflow.get_requirement("MultipleInputFeatureRequirement")[0])
 
-        try:
-            wo = object_from_state(self.state, self.tool["outputs"], True, supportsMultipleInput, "outputSource",
-                                   incomplete=True)
-        except WorkflowException as e:
-            _logger.error(u"[%s] Cannot collect workflow output: %s", self.name, e)
-            wo = {}
-            self.processStatus = "permanentFail"
+        wo = object_from_state(self.state, self.tool["outputs"], True, supportsMultipleInput, "outputSource")
+
+        if wo is None:
+            raise WorkflowException("Output for workflow not available")
 
         _logger.info(u"[%s] outdir is %s", self.name, self.outdir)
 
@@ -433,24 +399,20 @@ class Workflow(Process):
         kwargs["hints"] = self.hints
 
         makeTool = kwargs.get("makeTool")
-        self.steps = [WorkflowStep(step, n, **kwargs) for n, step in enumerate(self.tool.get("steps", []))]
+        self.steps = [WorkflowStep(step, n, **kwargs) for n,step in enumerate(self.tool.get("steps", []))]
         random.shuffle(self.steps)
 
         # TODO: statically validate data links instead of doing it at runtime.
 
-    def job(self,
-            job_order,  # type: Dict[Text, Text]
-            output_callbacks,  # type: Callable[[Any, Any], Any]
-            **kwargs  # type: Any
-            ):
-        # type: (...) -> Generator[Any, None, None]
-        builder = self._init_job(job_order, **kwargs)
+    def job(self, joborder, output_callback, **kwargs):
+        # type: (Dict[Text, Text], Callable[[Any, Any], Any], **Any) -> Generator
+        builder = self._init_job(joborder, **kwargs)
         wj = WorkflowJob(self, **kwargs)
         yield wj
 
         kwargs["part_of"] = u"workflow %s" % wj.name
 
-        for w in wj.job(builder.job, output_callbacks, **kwargs):
+        for w in wj.job(builder.job, output_callback, **kwargs):
             yield w
 
     def visit(self, op):
@@ -460,6 +422,7 @@ class Workflow(Process):
 
 
 class WorkflowStep(Process):
+
     def __init__(self, toolpath_object, pos, **kwargs):
         # type: (Dict[Text, Any], int, **Any) -> None
         if "id" in toolpath_object:
@@ -477,8 +440,7 @@ class WorkflowStep(Process):
                 self.embedded_tool = load_tool(
                     toolpath_object["run"], kwargs.get("makeTool"), kwargs,
                     enable_dev=kwargs.get("enable_dev"),
-                    strict=kwargs.get("strict"),
-                    fetcher_constructor=kwargs.get("fetcher_constructor"))
+                    strict=kwargs.get("strict"))
         except validate.ValidationException as v:
             raise WorkflowException(
                 u"Tool definition %s failed validation:\n%s" %
@@ -492,7 +454,7 @@ class WorkflowStep(Process):
                     param = {}  # type: Dict[Text, Any]
                     inputid = step_entry
                 else:
-                    param = copy.copy(step_entry)
+                    param = step_entry.copy()
                     inputid = step_entry["id"]
 
                 shortinputid = shortname(inputid)
@@ -507,11 +469,8 @@ class WorkflowStep(Process):
                     if stepfield == "in":
                         param["type"] = "Any"
                     else:
-                        raise WorkflowException(
-                            "[%s] Workflow step output '%s' not found in the outputs of the tool (expected one of '%s')" % (
-                                self.id, shortname(step_entry), "', '".join(
-                                    [shortname(tool_entry["id"]) for tool_entry in
-                                     self.embedded_tool.tool[toolfield]])))
+                        raise WorkflowException("[%s] Workflow step output '%s' not found in the outputs of the tool (expected one of '%s')" % (
+                            self.id, shortname(step_entry), "', '".join([shortname(tool_entry["id"]) for tool_entry in self.embedded_tool.tool[toolfield]])))
                 param["id"] = inputid
                 toolpath_object[toolfield].append(param)
 
@@ -520,8 +479,7 @@ class WorkflowStep(Process):
         if self.embedded_tool.tool["class"] == "Workflow":
             (feature, _) = self.get_requirement("SubworkflowFeatureRequirement")
             if not feature:
-                raise WorkflowException(
-                    "Workflow contains embedded workflow but SubworkflowFeatureRequirement not in requirements")
+                raise WorkflowException("Workflow contains embedded workflow but SubworkflowFeatureRequirement not in requirements")
 
         if "scatter" in self.tool:
             (feature, _) = self.get_requirement("ScatterFeatureRequirement")
@@ -539,8 +497,7 @@ class WorkflowStep(Process):
             inp_map = {i["id"]: i for i in inputparms}
             for s in scatter:
                 if s not in inp_map:
-                    raise WorkflowException(u"Scatter parameter '%s' does not correspond to an input parameter of this "
-                                            u"step, inputs are %s" % (s, inp_map.keys()))
+                    raise WorkflowException(u"Scatter parameter '%s' does not correspond to an input parameter of this step, inputs are %s" % (s, inp_map.keys()))
 
                 inp_map[s]["type"] = {"type": "array", "items": inp_map[s]["type"]}
 
@@ -557,7 +514,7 @@ class WorkflowStep(Process):
 
     def receive_output(self, output_callback, jobout, processStatus):
         # type: (Callable[...,Any], Dict[Text, Text], Text) -> None
-        # _logger.debug("WorkflowStep output from run is %s", jobout)
+        #_logger.debug("WorkflowStep output from run is %s", jobout)
         output = {}
         for i in self.tool["outputs"]:
             field = shortname(i["id"])
@@ -567,23 +524,17 @@ class WorkflowStep(Process):
                 processStatus = "permanentFail"
         output_callback(output, processStatus)
 
-    def job(self,
-            job_order,  # type: Dict[Text, Text]
-            output_callbacks,  # type: Callable[[Any, Any], Any]
-            **kwargs  # type: Any
-            ):
-        # type: (...) -> Generator[Any, None, None]
+    def job(self, joborder, output_callback, **kwargs):
+        # type: (Dict[Text, Any], Callable[...,Any], **Any) -> Generator
         for i in self.tool["inputs"]:
             p = i["id"]
             field = shortname(p)
-            job_order[field] = job_order[i["id"]]
-            del job_order[i["id"]]
+            joborder[field] = joborder[i["id"]]
+            del joborder[i["id"]]
 
         try:
-            for t in self.embedded_tool.job(job_order,
-                                            functools.partial(
-                                                self.receive_output,
-                                                output_callbacks),
+            for t in self.embedded_tool.job(joborder,
+                                            functools.partial(self.receive_output, output_callback),
                                             **kwargs):
                 yield t
         except WorkflowException:
@@ -598,6 +549,7 @@ class WorkflowStep(Process):
 
 
 class ReceiveScatterOutput(object):
+
     def __init__(self, output_callback, dest):
         # type: (Callable[..., Any], Dict[Text,List[Text]]) -> None
         self.dest = dest
@@ -608,7 +560,7 @@ class ReceiveScatterOutput(object):
 
     def receive_scatter_output(self, index, jobout, processStatus):
         # type: (int, Dict[Text, Text], Text) -> None
-        for k, v in jobout.items():
+        for k,v in jobout.items():
             self.dest[k][index] = v
 
         if processStatus != "success":
@@ -625,30 +577,22 @@ class ReceiveScatterOutput(object):
         if self.completed == self.total:
             self.output_callback(self.dest, self.processStatus)
 
-
 def parallel_steps(steps, rc, kwargs):  # type: (List[Generator], ReceiveScatterOutput, Dict[str, Any]) -> Generator
     while rc.completed < rc.total:
         made_progress = False
-        for index in xrange(len(steps)):
-            step = steps[index]
+        for step in steps:
             if kwargs.get("on_error", "stop") == "stop" and rc.processStatus != "success":
                 break
-            try:
-                for j in step:
-                    if kwargs.get("on_error", "stop") == "stop" and rc.processStatus != "success":
-                        break
-                    if j:
-                        made_progress = True
-                        yield j
-                    else:
-                        break
-            except WorkflowException as e:
-                _logger.error(u"Cannot make scatter job: %s", e)
-                _logger.debug("", exc_info=True)
-                rc.receive_scatter_output(index, {}, "permanentFail")
+            for j in step:
+                if kwargs.get("on_error", "stop") == "stop" and rc.processStatus != "success":
+                    break
+                if j:
+                    made_progress = True
+                    yield j
+                else:
+                    break
         if not made_progress and rc.completed < rc.total:
             yield None
-
 
 def dotproduct_scatter(process, joborder, scatter_keys, output_callback, **kwargs):
     # type: (WorkflowJobStep, Dict[Text, Any], List[Text], Callable[..., Any], **Any) -> Generator
@@ -699,16 +643,15 @@ def nested_crossproduct_scatter(process, joborder, scatter_keys, output_callback
             jo = kwargs["postScatterEval"](jo)
             steps.append(process.job(jo, functools.partial(rc.receive_scatter_output, n), **kwargs))
         else:
-            # known bug with mypy, https://github.com/python/mypy/issues/797
-            casted = cast(Callable[[Any], Any], functools.partial(rc.receive_scatter_output, n))
             steps.append(nested_crossproduct_scatter(process, jo,
-                                                     scatter_keys[1:],
-                                                     casted, **kwargs))
+                    scatter_keys[1:], cast(  # known bug with mypy
+                        # https://github.com/python/mypy/issues/797g
+                        Callable[[Any], Any],
+                        functools.partial(rc.receive_scatter_output, n)), **kwargs))
 
     rc.setTotal(l)
 
     return parallel_steps(steps, rc, kwargs)
-
 
 def crossproduct_size(joborder, scatter_keys):
     # type: (Dict[Text, Any], List[Text]) -> int
@@ -722,7 +665,6 @@ def crossproduct_size(joborder, scatter_keys):
             jo[scatter_key] = joborder[scatter_key][n]
             sum += crossproduct_size(joborder, scatter_keys[1:])
     return sum
-
 
 def flat_crossproduct_scatter(process, joborder, scatter_keys, output_callback, startindex, **kwargs):
     # type: (WorkflowJobStep, Dict[Text, Any], List[Text], Union[ReceiveScatterOutput,Callable[..., Any]], int, **Any) -> Union[List[Generator], Generator]

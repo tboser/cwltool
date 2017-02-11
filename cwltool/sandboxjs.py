@@ -1,29 +1,26 @@
-import cStringIO
-import errno
-import json
-import logging
-import os
-import select
 import subprocess
+import json
 import threading
+import errno
+import logging
+import select
+import os
+
+import cStringIO
 from cStringIO import StringIO
-
+from typing import Any, Dict, List, Mapping, Text, TypeVar, Union
 from pkg_resources import resource_stream
-from typing import Any, Dict, List, Mapping, Text, Union
-
 
 class JavascriptException(Exception):
     pass
 
-
 _logger = logging.getLogger("cwltool")
 
-JSON = Union[Dict[Text, Any], List[Any], Text, int, long, float, bool, None]
+JSON = Union[Dict[Text,Any], List[Any], Text, int, long, float, bool, None]
 
 localdata = threading.local()
 
 have_node_slim = False
-
 
 def new_js_proc():
     # type: () -> subprocess.Popen
@@ -35,8 +32,7 @@ def new_js_proc():
     trynodes = ("nodejs", "node")
     for n in trynodes:
         try:
-            nodejs = subprocess.Popen([n, "--eval", nodecode], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE)
+            nodejs = subprocess.Popen([n, "--eval", nodecode], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             break
         except OSError as e:
             if e.errno == errno.ENOENT:
@@ -76,15 +72,14 @@ def new_js_proc():
     return nodejs
 
 
-def execjs(js, jslib, timeout=None, debug=False):  # type: (Union[Mapping, Text], Any, int, bool) -> JSON
+def execjs(js, jslib, timeout=None):  # type: (Union[Mapping, Text], Any, int) -> JSON
 
     if not hasattr(localdata, "proc") or localdata.proc.poll() is not None:
         localdata.proc = new_js_proc()
 
     nodejs = localdata.proc
 
-    fn = u"\"use strict\";\n%s\n(function()%s)()" %\
-         (jslib, js if isinstance(js, basestring) and len(js) > 1 and js[0] == '{' else ("{return (%s);}" % js))
+    fn = u"\"use strict\";\n%s\n(function()%s)()" % (jslib, js if isinstance(js, basestring) and len(js) > 1 and js[0] == '{' else ("{return (%s);}" % js))
 
     killed = []
 
@@ -101,7 +96,7 @@ def execjs(js, jslib, timeout=None, debug=False):  # type: (Union[Mapping, Text]
     tm = threading.Timer(timeout, term)
     tm.start()
 
-    stdin_buf = StringIO(json.dumps(fn) + "\n")
+    stdin_buf = StringIO(json.dumps(fn)+"\n")
     stdout_buf = StringIO()
     stderr_buf = StringIO()
 
@@ -132,33 +127,15 @@ def execjs(js, jslib, timeout=None, debug=False):  # type: (Union[Mapping, Text]
     stderrdata = stderr_buf.getvalue()
 
     def fn_linenum():  # type: () -> Text
-        lines = fn.splitlines()
-        ofs = 0
-        maxlines = 99
-        if len(lines) > maxlines:
-            ofs = len(lines) - maxlines
-            lines = lines[-maxlines:]
-        return u"\n".join(u"%02i %s" % (i + ofs + 1, b) for i, b in enumerate(lines))
-
-    def stdfmt(data):  # type: (unicode) -> unicode
-        if "\n" in data:
-            return "\n" + data.strip()
-        return data
-
-    if debug:
-        info = u"returncode was: %s\nscript was:\n%s\nstdout was: %s\nstderr was: %s\n" %\
-               (nodejs.returncode, fn_linenum(), stdfmt(stdoutdata), stdfmt(stderrdata))
-    else:
-        info = stdfmt(stderrdata)
+        return u"\n".join(u"%04i %s" % (i+1, b) for i, b in enumerate(fn.split("\n")))
 
     if nodejs.poll() not in (None, 0):
         if killed:
-            raise JavascriptException(u"Long-running script killed after %s seconds: %s" % (timeout, info))
+            raise JavascriptException(u"Long-running script killed after %s seconds.\nscript was:\n%s\n" % (timeout, fn_linenum()))
         else:
-            raise JavascriptException(info)
+            raise JavascriptException(u"Returncode was: %s\nscript was:\n%s\nstdout was: '%s'\nstderr was: '%s'\n" % (nodejs.returncode, fn_linenum(), stdoutdata, stderrdata))
     else:
         try:
             return json.loads(stdoutdata)
         except ValueError as e:
-            raise JavascriptException(u"%s\nscript was:\n%s\nstdout was: '%s'\nstderr was: '%s'\n" %
-                                      (e, fn_linenum(), stdoutdata, stderrdata))
+            raise JavascriptException(u"%s\nscript was:\n%s\nstdout was: '%s'\nstderr was: '%s'\n" % (e, fn_linenum(), stdoutdata, stderrdata))

@@ -1,6 +1,5 @@
 import subprocess
-
-from typing import Text
+from typing import Text, Union
 
 
 def docker_vm_uid():  # type: () -> int

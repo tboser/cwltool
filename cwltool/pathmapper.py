@@ -1,21 +1,16 @@
-import collections
-import logging
 import os
+import logging
 import stat
-import urllib
-import urlparse
+import collections
 import uuid
+import urlparse
 from functools import partial
-
-import schema_salad.validate as validate
-from schema_salad.ref_resolver import uri_file_path
-from schema_salad.sourceline import SourceLine
 from typing import Any, Callable, Set, Text, Tuple, Union
+import schema_salad.validate as validate
 
 _logger = logging.getLogger("cwltool")
 
 MapperEnt = collections.namedtuple("MapperEnt", ["resolved", "target", "type"])
-
 
 def adjustFiles(rec, op):  # type: (Any, Union[Callable[..., Any], partial[Any]]) -> None
     """Apply a mapping function to each File path in the object `rec`."""
@@ -29,7 +24,6 @@ def adjustFiles(rec, op):  # type: (Any, Union[Callable[..., Any], partial[Any]]
         for d in rec:
             adjustFiles(d, op)
 
-
 def adjustFileObjs(rec, op):  # type: (Any, Union[Callable[..., Any], partial[Any]]) -> None
     """Apply an update function to each File object in the object `rec`."""
 
@@ -41,7 +35,6 @@ def adjustFileObjs(rec, op):  # type: (Any, Union[Callable[..., Any], partial[An
     if isinstance(rec, list):
         for d in rec:
             adjustFileObjs(d, op)
-
 
 def adjustDirObjs(rec, op):
     # type: (Any, Union[Callable[..., Any], partial[Any]]) -> None
@@ -56,7 +49,6 @@ def adjustDirObjs(rec, op):
         for d in rec:
             adjustDirObjs(d, op)
 
-
 def normalizeFilesDirs(job):
     # type: (Union[List[Dict[Text, Any]], Dict[Text, Any]]) -> None
     def addLocation(d):
@@ -64,15 +56,14 @@ def normalizeFilesDirs(job):
             if d["class"] == "File" and ("contents" not in d):
                 raise validate.ValidationException("Anonymous file object must have 'contents' and 'basename' fields.")
             if d["class"] == "Directory" and ("listing" not in d or "basename" not in d):
-                raise validate.ValidationException(
-                    "Anonymous directory object must have 'listing' and 'basename' fields.")
+                raise validate.ValidationException("Anonymous directory object must have 'listing' and 'basename' fields.")
             d["location"] = "_:" + Text(uuid.uuid4())
             if "basename" not in d:
                 d["basename"] = Text(uuid.uuid4())
 
         if "basename" not in d:
             parse = urlparse.urlparse(d["location"])
-            d["basename"] = os.path.basename(urllib.url2pathname(parse.path))
+            d["basename"] = os.path.basename(parse.path)
 
     adjustFileObjs(job, addLocation)
     adjustDirObjs(job, addLocation)
@@ -80,11 +71,10 @@ def normalizeFilesDirs(job):
 
 def abspath(src, basedir):  # type: (Text, Text) -> Text
     if src.startswith(u"file://"):
-        ab = unicode(uri_file_path(str(src)))
+        ab = src[7:]
     else:
         ab = src if os.path.isabs(src) else os.path.join(basedir, src)
     return ab
-
 
 def dedup(listing):  # type: (List[Any]) -> List[Any]
     marksub = set()
@@ -109,6 +99,7 @@ def dedup(listing):  # type: (List[Any]) -> List[Any]
 
 
 class PathMapper(object):
+
     """Mapping of files from relative path provided in the file to a tuple of
     (absolute local path, absolute container path)
 
@@ -175,17 +166,7 @@ class PathMapper(object):
                 if copy:
                     self._pathmap[path] = MapperEnt(ab, tgt, "WritableFile")
                 else:
-                    with SourceLine(obj, "location", validate.ValidationException):
-                        # Dereference symbolic links
-                        deref = ab
-                        st = os.lstat(deref)
-                        while stat.S_ISLNK(st.st_mode):
-                            rl = os.readlink(deref)
-                            deref = rl if os.path.isabs(rl) else os.path.join(
-                                os.path.dirname(deref), rl)
-                            st = os.lstat(deref)
-
-                    self._pathmap[path] = MapperEnt(deref, tgt, "File")
+                    self._pathmap[path] = MapperEnt(ab, tgt, "File")
                 self.visitlisting(obj.get("secondaryFiles", []), stagedir, basedir)
 
     def setup(self, referenced_files, basedir):
@@ -198,6 +179,20 @@ class PathMapper(object):
             if self.separateDirs:
                 stagedir = os.path.join(self.stagedir, "stg%s" % uuid.uuid4())
             self.visit(fob, stagedir, basedir)
+
+        # Dereference symbolic links
+        for path, (ab, tgt, type) in self._pathmap.items():
+            if type != "File":  # or not os.path.exists(ab):
+                continue
+            deref = ab
+            st = os.lstat(deref)
+            while stat.S_ISLNK(st.st_mode):
+                rl = os.readlink(deref)
+                deref = rl if os.path.isabs(rl) else os.path.join(
+                    os.path.dirname(deref), rl)
+                st = os.lstat(deref)
+
+            self._pathmap[path] = MapperEnt(deref, tgt, "File")
 
     def mapper(self, src):  # type: (Text) -> MapperEnt
         if u"#" in src:
