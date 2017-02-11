@@ -18,7 +18,7 @@ except ImportError:
     tagger = egg_info_cmd.egg_info
 
 setup(name='cwltool-ucsc',
-      version='1.0',
+      version='1.1',
       description='Common workflow language reference implementation patched for UCSC Genomics Institute',
       long_description=open(README).read(),
       author='Common workflow language working group',
