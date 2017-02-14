@@ -28,7 +28,7 @@ well)::
 
 If installling alongside another CWL implementation then::
 
-  pip install cwltool
+  pip instal cwltool
 
 To install from source::
 

@@ -6,16 +6,18 @@ Setuptools bootstrapping installer.
 Run this script to install or upgrade setuptools.
 """
 
-import contextlib
-import optparse
 import os
-import platform
 import shutil
-import subprocess
 import sys
 import tempfile
-import textwrap
 import zipfile
+import optparse
+import subprocess
+import platform
+import textwrap
+import contextlib
+import warnings
+
 from distutils import log
 
 try:
@@ -68,6 +70,7 @@ def _build_egg(egg, archive_filename, to_dir):
 
 
 class ContextualZipFile(zipfile.ZipFile):
+
     """Supplement ZipFile class to support context manager for Python 2.6."""
 
     def __enter__(self):
@@ -173,13 +176,13 @@ def _conflict_bail(VC_err, version):
     unsafe to unload it. Bail out.
     """
     conflict_tmpl = textwrap.dedent("""
-		The required version of setuptools (>={version}) is not available,
-		and can't be installed while this script is running. Please
-		install a more recent version first, using
-		'easy_install -U setuptools'.
+        The required version of setuptools (>={version}) is not available,
+        and can't be installed while this script is running. Please
+        install a more recent version first, using
+        'easy_install -U setuptools'.
 
-		(Currently using {VC_err.args[0]!r})
-		""")
+        (Currently using {VC_err.args[0]!r})
+        """)
     msg = conflict_tmpl.format(**locals())
     sys.stderr.write(msg)
     sys.exit(2)
@@ -189,7 +192,7 @@ def _unload_pkg_resources():
     del_modules = [
         name for name in sys.modules
         if name.startswith('pkg_resources')
-        ]
+    ]
     for mod_name in del_modules:
         del sys.modules[mod_name]
 
@@ -241,8 +244,6 @@ def has_powershell():
         except Exception:
             return False
     return True
-
-
 download_file_powershell.viable = has_powershell
 
 
@@ -259,8 +260,6 @@ def has_curl():
         except Exception:
             return False
     return True
-
-
 download_file_curl.viable = has_curl
 
 
@@ -277,8 +276,6 @@ def has_wget():
         except Exception:
             return False
     return True
-
-
 download_file_wget.viable = has_wget
 
 
@@ -294,8 +291,6 @@ def download_file_insecure(url, target):
     # Write all the data in one block to avoid creating a partial file.
     with open(target, "wb") as dst:
         dst.write(data)
-
-
 download_file_insecure.viable = lambda: True
 
 
@@ -367,9 +362,9 @@ def _parse_args():
         default=DEFAULT_VERSION,
     )
     parser.add_option(
-        '--to-dir',
-        help="Directory to save (and re-use) package",
-        default=DEFAULT_SAVE_DIR,
+    	'--to-dir',
+    	help="Directory to save (and re-use) package",
+    	default=DEFAULT_SAVE_DIR,
     )
     options, args = parser.parse_args()
     # positional arguments are ignored
@@ -377,13 +372,13 @@ def _parse_args():
 
 
 def _download_args(options):
-    """Return args for download_setuptools function from cmdline args."""
-    return dict(
-        version=options.version,
-        download_base=options.download_base,
-        downloader_factory=options.downloader_factory,
-        to_dir=options.to_dir,
-    )
+	"""Return args for download_setuptools function from cmdline args."""
+	return dict(
+		version=options.version,
+		download_base=options.download_base,
+		downloader_factory=options.downloader_factory,
+		to_dir=options.to_dir,
+	)
 
 
 def main():
@@ -391,7 +386,6 @@ def main():
     options = _parse_args()
     archive = download_setuptools(**_download_args(options))
     return _install(archive, _build_install_args(options))
-
 
 if __name__ == '__main__':
     sys.exit(main())
