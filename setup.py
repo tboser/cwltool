@@ -17,7 +17,7 @@ try:
 except ImportError:
     tagger = egg_info_cmd.egg_info
 
-setup(name='cwltool',
+setup(name='cwltool-ucsc',
       version='1.35',
       description='Common workflow language reference implementation patched for UCSC-CGL',
       long_description=open(README).read(),

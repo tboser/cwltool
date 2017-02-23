@@ -3,36 +3,22 @@ import json
 import threading
 import errno
 import logging
-import select
-import os
+from typing import Any, Union, TypeVar, Dict, List, Mapping
 
-import cStringIO
-from cStringIO import StringIO
-from typing import Any, Dict, List, Mapping, Text, TypeVar, Union
-from pkg_resources import resource_stream
 
 class JavascriptException(Exception):
     pass
 
 _logger = logging.getLogger("cwltool")
 
-JSON = Union[Dict[Text,Any], List[Any], Text, int, long, float, bool, None]
+JSON = Union[Dict[Any,Any], List[Any], unicode, int, long, float, bool, None]
 
-localdata = threading.local()
-
-have_node_slim = False
-
-def new_js_proc():
-    # type: () -> subprocess.Popen
-
-    res = resource_stream(__name__, 'cwlNodeEngine.js')
-    nodecode = res.read()
-
+def execjs(js, jslib, timeout=None):  # type: (Union[Mapping,str], Any, int) -> JSON
     nodejs = None
     trynodes = ("nodejs", "node")
     for n in trynodes:
         try:
-            nodejs = subprocess.Popen([n, "--eval", nodecode], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            nodejs = subprocess.Popen([n], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             break
         except OSError as e:
             if e.errno == errno.ENOENT:
@@ -43,17 +29,14 @@ def new_js_proc():
     if nodejs is None:
         try:
             nodeimg = "node:slim"
-            global have_node_slim
-            if not have_node_slim:
-                dockerimgs = subprocess.check_output(["docker", "images", nodeimg])
-                if len(dockerimgs.split("\n")) <= 1:
-                    nodejsimg = subprocess.check_output(["docker", "pull", nodeimg])
-                    _logger.info("Pulled Docker image %s %s", nodeimg, nodejsimg)
-                have_node_slim = True
+            dlist = subprocess.check_output(["docker", "images", nodeimg])
+            if "node" not in dlist:
+                nodejsimg = subprocess.check_output(["docker", "pull", nodeimg])
+                _logger.info("Pulled Docker image %s %s", nodeimg, nodejsimg)
             nodejs = subprocess.Popen(["docker", "run",
                                        "--attach=STDIN", "--attach=STDOUT", "--attach=STDERR",
                                        "--sig-proxy=true", "--interactive",
-                                       "--rm", nodeimg, "node", "--eval", nodecode],
+                                       "--rm", nodeimg],
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:
             if e.errno == errno.ENOENT:
@@ -65,28 +48,18 @@ def new_js_proc():
 
     if nodejs is None:
         raise JavascriptException(
-            u"cwltool requires Node.js engine to evaluate Javascript "
-            "expressions, but couldn't find it.  Tried %s, docker run "
-            "node:slim" % u", ".join(trynodes))
-
-    return nodejs
-
-
-def execjs(js, jslib, timeout=None):  # type: (Union[Mapping, Text], Any, int) -> JSON
-
-    if not hasattr(localdata, "proc") or localdata.proc.poll() is not None:
-        localdata.proc = new_js_proc()
-
-    nodejs = localdata.proc
+                u"cwltool requires Node.js engine to evaluate Javascript "
+                "expressions, but couldn't find it.  Tried %s, docker run "
+                "node:slim" % u", ".join(trynodes))
 
     fn = u"\"use strict\";\n%s\n(function()%s)()" % (jslib, js if isinstance(js, basestring) and len(js) > 1 and js[0] == '{' else ("{return (%s);}" % js))
+    script = u"console.log(JSON.stringify(require(\"vm\").runInNewContext(%s, {})));\n" % json.dumps(fn)
 
     killed = []
-
     def term():
         try:
-            killed.append(True)
             nodejs.kill()
+            killed.append(True)
         except OSError:
             pass
 
@@ -96,46 +69,119 @@ def execjs(js, jslib, timeout=None):  # type: (Union[Mapping, Text], Any, int) -
     tm = threading.Timer(timeout, term)
     tm.start()
 
-    stdin_buf = StringIO(json.dumps(fn)+"\n")
-    stdout_buf = StringIO()
-    stderr_buf = StringIO()
-
-    completed = []  # type: List[Union[cStringIO.InputType, cStringIO.OutputType]]
-    while len(completed) < 3:
-        rready, wready, _ = select.select([nodejs.stdout, nodejs.stderr], [nodejs.stdin], [])
-        if nodejs.stdin in wready:
-            b = stdin_buf.read(select.PIPE_BUF)
-            if b:
-                os.write(nodejs.stdin.fileno(), b)
-            elif stdin_buf not in completed:
-                completed.append(stdin_buf)
-        for pipes in ((nodejs.stdout, stdout_buf), (nodejs.stderr, stderr_buf)):
-            if pipes[0] in rready:
-                b = os.read(pipes[0].fileno(), select.PIPE_BUF)
-                if b:
-                    pipes[1].write(b)
-                elif pipes[1] not in completed:
-                    completed.append(pipes[1])
-        if stdout_buf.getvalue().endswith("\n"):
-            for buf in (stdout_buf, stderr_buf):
-                if buf not in completed:
-                    completed.append(buf)
+    stdoutdata, stderrdata = nodejs.communicate(script)
     tm.cancel()
 
-    stdin_buf.close()
-    stdoutdata = stdout_buf.getvalue()
-    stderrdata = stderr_buf.getvalue()
-
-    def fn_linenum():  # type: () -> Text
+    def fn_linenum():  # type: () -> unicode
         return u"\n".join(u"%04i %s" % (i+1, b) for i, b in enumerate(fn.split("\n")))
 
-    if nodejs.poll() not in (None, 0):
-        if killed:
-            raise JavascriptException(u"Long-running script killed after %s seconds.\nscript was:\n%s\n" % (timeout, fn_linenum()))
-        else:
-            raise JavascriptException(u"Returncode was: %s\nscript was:\n%s\nstdout was: '%s'\nstderr was: '%s'\n" % (nodejs.returncode, fn_linenum(), stdoutdata, stderrdata))
+    if killed:
+        raise JavascriptException(u"Long-running script killed after %s seconds.\nscript was:\n%s\n" % (timeout, fn_linenum()))
+
+    if nodejs.returncode != 0:
+        raise JavascriptException(u"Returncode was: %s\nscript was:\n%s\nstdout was: '%s'\nstderr was: '%s'\n" % (nodejs.returncode, fn_linenum(), stdoutdata, stderrdata))
     else:
         try:
             return json.loads(stdoutdata)
         except ValueError as e:
             raise JavascriptException(u"%s\nscript was:\n%s\nstdout was: '%s'\nstderr was: '%s'\n" % (e, fn_linenum(), stdoutdata, stderrdata))
+
+class SubstitutionError(Exception):
+    pass
+
+
+def scanner(scan):  # type: (str) -> List[int]
+    DEFAULT = 0
+    DOLLAR = 1
+    PAREN = 2
+    BRACE = 3
+    SINGLE_QUOTE = 4
+    DOUBLE_QUOTE = 5
+    BACKSLASH = 6
+
+    i = 0
+    stack = [DEFAULT]
+    start = 0
+    while i < len(scan):
+        state = stack[-1]
+        c = scan[i]
+
+        if state == DEFAULT:
+            if c == '$':
+                stack.append(DOLLAR)
+            elif c == '\\':
+                stack.append(BACKSLASH)
+        elif state == BACKSLASH:
+            stack.pop()
+            if stack[-1] == DEFAULT:
+                return [i-1, i+1]
+        elif state == DOLLAR:
+            if c == '(':
+                start = i-1
+                stack.append(PAREN)
+            elif c == '{':
+                start = i-1
+                stack.append(BRACE)
+        elif state == PAREN:
+            if c == '(':
+                stack.append(PAREN)
+            elif c == ')':
+                stack.pop()
+                if stack[-1] == DOLLAR:
+                    return [start, i+1]
+            elif c == "'":
+                stack.append(SINGLE_QUOTE)
+            elif c == '"':
+                stack.append(DOUBLE_QUOTE)
+        elif state == BRACE:
+            if c == '{':
+                stack.append(BRACE)
+            elif c == '}':
+                stack.pop()
+                if stack[-1] == DOLLAR:
+                    return [start, i+1]
+            elif c == "'":
+                stack.append(SINGLE_QUOTE)
+            elif c == '"':
+                stack.append(DOUBLE_QUOTE)
+        elif state == SINGLE_QUOTE:
+            if c == "'":
+                stack.pop()
+            elif c == '\\':
+                stack.append(BACKSLASH)
+        elif state == DOUBLE_QUOTE:
+            if c == '"':
+                stack.pop()
+            elif c == '\\':
+                stack.append(BACKSLASH)
+        i += 1
+
+    if len(stack) > 1:
+        raise SubstitutionError("Substitution error, unfinished block starting at position {}: {}".format(start, scan[start:]))
+    else:
+        return None
+
+
+def interpolate(scan, jslib, timeout=None):  # type: (str, Union[str, unicode], int) -> JSON
+    scan = scan.strip()
+    parts = []
+    w = scanner(scan)
+    while w:
+        parts.append(scan[0:w[0]])
+
+        if scan[w[0]] == '$':
+            e = execjs(scan[w[0]+1:w[1]], jslib, timeout=timeout)
+            if w[0] == 0 and w[1] == len(scan):
+                return e
+            leaf = json.dumps(e, sort_keys=True)
+            if leaf[0] == '"':
+                leaf = leaf[1:-1]
+            parts.append(leaf)
+        elif scan[w[0]] == '\\':
+            e = scan[w[1]-1]
+            parts.append(e)
+
+        scan = scan[w[1]:]
+        w = scanner(scan)
+    parts.append(scan)
+    return ''.join(parts)

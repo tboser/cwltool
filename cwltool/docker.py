@@ -6,19 +6,18 @@ import os
 from .errors import WorkflowException
 import re
 import tempfile
-from typing import Any, Text, Union
+from typing import Any, Union
 
 _logger = logging.getLogger("cwltool")
 
 def get_image(dockerRequirement, pull_image, dry_run=False):
-    # type: (Dict[Text, Text], bool, bool) -> bool
+    # type: (Dict[str,str], bool, bool) -> bool
     found = False
 
     if "dockerImageId" not in dockerRequirement and "dockerPull" in dockerRequirement:
         dockerRequirement["dockerImageId"] = dockerRequirement["dockerPull"]
 
-    for ln in subprocess.check_output(
-            ["docker", "images", "--no-trunc", "--all"]).splitlines():
+    for ln in subprocess.check_output(["docker", "images", "--no-trunc", "--all"]).splitlines():
         try:
             m = re.match(r"^([^ ]+)\s+([^ ]+)\s+([^ ]+)", ln)
             sp = dockerRequirement["dockerImageId"].split(":")
@@ -32,10 +31,9 @@ def get_image(dockerRequirement, pull_image, dry_run=False):
             pass
 
     if not found and pull_image:
-        cmd = []  # type: List[str]
         if "dockerPull" in dockerRequirement:
-            cmd = ["docker", "pull", str(dockerRequirement["dockerPull"])]
-            _logger.info(Text(cmd))
+            cmd = ["docker", "pull", dockerRequirement["dockerPull"]]
+            _logger.info(str(cmd))
             if not dry_run:
                 subprocess.check_call(cmd, stdout=sys.stderr)
                 found = True
@@ -43,15 +41,14 @@ def get_image(dockerRequirement, pull_image, dry_run=False):
             dockerfile_dir = str(tempfile.mkdtemp())
             with open(os.path.join(dockerfile_dir, "Dockerfile"), "w") as df:
                 df.write(dockerRequirement["dockerFile"])
-            cmd = ["docker", "build", "--tag=%s" %
-                str(dockerRequirement["dockerImageId"]), dockerfile_dir]
-            _logger.info(Text(cmd))
+            cmd = ["docker", "build", "--tag=%s" % dockerRequirement["dockerImageId"], dockerfile_dir]
+            _logger.info(str(cmd))
             if not dry_run:
                 subprocess.check_call(cmd, stdout=sys.stderr)
                 found = True
         elif "dockerLoad" in dockerRequirement:
             cmd = ["docker", "load"]
-            _logger.info(Text(cmd))
+            _logger.info(str(cmd))
             if not dry_run:
                 if os.path.exists(dockerRequirement["dockerLoad"]):
                     _logger.info(u"Loading docker image from %s", dockerRequirement["dockerLoad"])
@@ -72,9 +69,8 @@ def get_image(dockerRequirement, pull_image, dry_run=False):
                     raise WorkflowException("Docker load returned non-zero exit status %i" % (rcode))
                 found = True
         elif "dockerImport" in dockerRequirement:
-            cmd = ["docker", "import", str(dockerRequirement["dockerImport"]),
-                str(dockerRequirement["dockerImageId"])]
-            _logger.info(Text(cmd))
+            cmd = ["docker", "import", dockerRequirement["dockerImport"], dockerRequirement["dockerImageId"]]
+            _logger.info(str(cmd))
             if not dry_run:
                 subprocess.check_call(cmd, stdout=sys.stderr)
                 found = True
@@ -83,15 +79,15 @@ def get_image(dockerRequirement, pull_image, dry_run=False):
 
 
 def get_from_requirements(r, req, pull_image, dry_run=False):
-    # type: (Dict[Text, Text], bool, bool, bool) -> Text
+    # type: (Dict[str,str], bool, bool, bool) -> Union[None,str]
     if r:
         errmsg = None
         try:
             subprocess.check_output(["docker", "version"])
         except subprocess.CalledProcessError as e:
-            errmsg = "Cannot communicate with docker daemon: " + Text(e)
+            errmsg = "Cannot communicate with docker daemon: " + str(e)
         except OSError as e:
-            errmsg = "'docker' executable not found: " + Text(e)
+            errmsg = "'docker' executable not found: " + str(e)
 
         if errmsg:
             if req:

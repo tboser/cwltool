@@ -200,7 +200,7 @@ def relocateOutputs(outputObj, outdir, output_dirs, action):
         return outputObj
 
     def moveIt(src, dst):
-        for a in set(['/datastore']):
+        for a in output_dirs:
             if src.startswith(a):
                 if action == "move":
                     _logger.debug("Moving %s to %s", src, dst)
